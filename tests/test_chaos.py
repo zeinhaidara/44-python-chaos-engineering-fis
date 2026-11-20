@@ -6,7 +6,7 @@ import pytest
 from chaos.cli import main
 from chaos.config import ConfigError, Experiment, load
 from chaos.report import to_markdown
-from chaos.runner import GuardError, Runner, StopFailed
+from chaos.runner import STOP_FAILED, GuardError, Runner
 
 ROOT = Path(__file__).parent.parent
 CONFIG = load(ROOT / "experiments.yaml")
@@ -199,10 +199,45 @@ def test_error_while_running_still_stops_the_experiment():
     assert any("ThrottlingException" in t for _, t in r.log)
 
 
-def test_stop_failure_is_raised_not_swallowed():
+def test_stop_failure_is_recorded_not_swallowed():
     clock, fis = Clock(), FakeFIS(statuses=["running"], stop_error=RuntimeError("AccessDenied"))
-    with pytest.raises(StopFailed, match="stop it in the FIS console"):
-        runner(fis, clock, SteadyState(clock)).run([API])
+    [r] = runner(fis, clock, SteadyState(clock)).run([API])
+    assert r.status == STOP_FAILED
+    assert any("STOP FAILED for EXP0001: RuntimeError: AccessDenied" in t for _, t in r.log)
+    assert any("Stop it in the FIS console now" in t for _, t in r.log)
+
+
+class SecondGetsStuck(FakeFIS):
+    """First experiment completes; the second never leaves running and can't be stopped."""
+
+    def get_experiment(self, id):
+        status = "completed" if id == "EXP0001" else "running"
+        return {"experiment": {"id": id, "state": {"status": status, "reason": ""}}}
+
+    def stop_experiment(self, id):
+        raise RuntimeError("AccessDeniedException")
+
+
+class FirstGetsStuck(SecondGetsStuck):
+    def get_experiment(self, id):
+        return {"experiment": {"id": id, "state": {"status": "running", "reason": ""}}}
+
+
+def test_earlier_results_are_kept_when_a_later_stop_fails():
+    clock = Clock()
+    fis = SecondGetsStuck()
+    results = runner(fis, clock, SteadyState(clock), max_experiments=2).run(CONFIG.experiments)
+    assert [r.status for r in results] == ["PASS", STOP_FAILED]
+    assert results[1].experiment_id == "EXP0002"
+
+
+def test_nothing_else_starts_after_a_failed_stop():
+    clock = Clock()
+    fis = FirstGetsStuck()
+    results = runner(fis, clock, SteadyState(clock), max_experiments=2).run(CONFIG.experiments)
+    assert [r.status for r in results] == [STOP_FAILED, "NOT_RUN"]
+    assert fis.started == ["EXT1a2b3c4d5e6f7a"]  # the second template was never started
+    assert "an earlier experiment could not be stopped" in results[1].log[0][1]
 
 
 def test_start_error_needs_no_stop():
@@ -262,3 +297,32 @@ def test_experiment_dataclass_is_frozen():
     with pytest.raises(AttributeError):
         API.name = "x"  # type: ignore[misc]
     assert isinstance(API, Experiment)
+
+
+def test_cli_stop_failed_writes_report_and_exits_3(tmp_path, capsys):
+    clock = Clock()
+    report = tmp_path / "r.md"
+    code = main(
+        [
+            "--config",
+            str(ROOT / "experiments.yaml"),
+            "--report",
+            str(report),
+            "--max-experiments",
+            "2",
+            "--execute",
+        ],
+        fis=SecondGetsStuck(),
+        check=SteadyState(clock),
+        clock=clock,
+        sleep=clock.sleep,
+    )
+    assert code == 3
+    text = report.read_text(encoding="utf-8")
+    assert "> **STOP FAILED: experiment EXP0002 (reboot-cache-node)" in text
+    assert "| stop-one-api-task | EXT1a2b3c4d5e6f7a | **PASS** |" in text
+    assert "| reboot-cache-node | EXT9f8e7d6c5b4a3b | **STOP_FAILED** |" in text
+    err = capsys.readouterr().err
+    assert "STOP FAILED: experiment EXP0002" in err
+    assert "Stop it in the FIS console now" in err
+    assert "aws fis stop-experiment --id EXP0002" in err
