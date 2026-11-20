@@ -10,7 +10,9 @@ from pathlib import Path
 
 from chaos.config import load
 from chaos.report import to_markdown
-from chaos.runner import Runner, http_check
+from chaos.runner import STOP_FAILED, Runner, http_check
+
+EXIT_OK, EXIT_FAILED, EXIT_STOP_FAILED = 0, 1, 3
 
 
 def parse_args(argv=None) -> argparse.Namespace:
@@ -53,10 +55,22 @@ def main(argv=None, fis=None, check=http_check, clock=None, sleep=None) -> int:
         results = runner.run(chosen)
     except Exception as exc:
         print(f"error: {type(exc).__name__}: {exc}", file=sys.stderr)
-        return 1
+        return EXIT_FAILED
 
     args.report.write_text(to_markdown(results, config.environment, args.execute), encoding="utf-8")
     for r in results:
         print(f"{r.experiment.name}: {r.status}")
+    print(f"report written to {args.report}")
+
+    stuck = [r for r in results if r.status == STOP_FAILED]
+    for r in stuck:
+        print(
+            f"STOP FAILED: experiment {r.experiment_id} ({r.experiment.name}) may still be "
+            "injecting faults. Stop it in the FIS console now "
+            f"(or: aws fis stop-experiment --id {r.experiment_id}).",
+            file=sys.stderr,
+        )
+    if stuck:
+        return EXIT_STOP_FAILED
     ok = all(r.status in ("PASS", "DRY_RUN") for r in results)
-    return 0 if ok else 1
+    return EXIT_OK if ok else EXIT_FAILED

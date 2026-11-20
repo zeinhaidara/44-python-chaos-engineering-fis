@@ -31,14 +31,13 @@ class GuardError(RuntimeError):
     """Refused before anything was injected."""
 
 
-class StopFailed(RuntimeError):
-    """We could not stop a running experiment. A human must stop it."""
+STOP_FAILED = "STOP_FAILED"
 
 
 @dataclass
 class Result:
     experiment: Experiment
-    status: str = "PENDING"  # PASS, FAIL, NOT_RUN, DRY_RUN
+    status: str = "PENDING"  # PASS, FAIL, NOT_RUN, DRY_RUN, STOP_FAILED
     experiment_id: str | None = None
     started_at: datetime | None = None
     recovered_at: datetime | None = None
@@ -88,7 +87,16 @@ class Runner:
 
     def run(self, experiments: list[Experiment]) -> list[Result]:
         self.guard(experiments)
-        return [self._one(e) for e in experiments]
+        results: list[Result] = []
+        for e in experiments:
+            if results and results[-1].status == STOP_FAILED:
+                # A fault may still be live; don't inject anything else on top of it.
+                skipped = Result(e, status="NOT_RUN")
+                self._note(skipped, "not started: an earlier experiment could not be stopped")
+                results.append(skipped)
+                continue
+            results.append(self._one(e))
+        return results
 
     def _note(self, r: Result, text: str) -> None:
         r.log.append((self.clock(), text))
@@ -165,8 +173,12 @@ class Runner:
         try:
             self.fis.stop_experiment(id=r.experiment_id)
         except Exception as exc:
-            self._note(r, f"STOP FAILED: {type(exc).__name__}: {exc}")
-            raise StopFailed(
-                f"could not stop {r.experiment_id}; stop it in the FIS console now"
-            ) from exc
+            # Recorded, not swallowed: the status drives the report and a distinct exit code.
+            r.status = STOP_FAILED
+            self._note(
+                r,
+                f"STOP FAILED for {r.experiment_id}: {type(exc).__name__}: {exc}. "
+                "Stop it in the FIS console now.",
+            )
+            return
         self._note(r, f"stopped experiment {r.experiment_id}")

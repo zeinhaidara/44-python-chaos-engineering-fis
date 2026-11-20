@@ -12,6 +12,15 @@ def to_markdown(results: list[Result], environment: str, execute: bool) -> str:
         f"- Environment: {environment}",
         f"- Mode: {'execute' if execute else 'dry run'}",
         "",
+    ]
+    for r in results:
+        if r.status == "STOP_FAILED":
+            lines += [
+                f"> **STOP FAILED: experiment {r.experiment_id} ({r.experiment.name}) could not "
+                "be stopped and may still be injecting faults. Stop it in the FIS console now.**",
+                "",
+            ]
+    lines += [
         "| Experiment | FIS template | Result | Time to recover | Runbook step verified |",
         "|---|---|---|---|---|",
     ]
