@@ -6,7 +6,7 @@ limit, as the matching runbook step says it should. Experiments are
 declared in YAML. It is a **dry run** unless you pass `--execute`.
 
 > **Status:** AWS FIS only. **Azure Chaos Studio is not implemented.**
-> 24 pytest tests drive the runner with a fake FIS client, an injected
+> 27 pytest tests drive the runner with a fake FIS client, an injected
 > clock and sleep, and a fake steady-state check that goes down and comes
 > back on the shared clock. They cover the guards, dry run, recovery in
 > time, no recovery, stuck experiments, API errors and a failed stop.
@@ -60,9 +60,14 @@ flowchart TD
   steady-state check.
 - **Always stopped:** if anything goes wrong after the experiment starts
   (timeout, API error, crash in the watch loop), a `finally` block calls
-  `StopExperiment`. If that stop call fails, the script raises `StopFailed`
-  and tells you to stop it in the FIS console. That error is never
-  swallowed.
+  `StopExperiment`.
+- **If the stop itself fails**, that experiment is marked `STOP_FAILED` and
+  nothing further is started in the run (a fault may still be live). The
+  report is still written, with a STOP FAILED banner at the top and the
+  error in that experiment's log, and results of experiments that ran
+  earlier are kept. The script prints the experiment ID with the instruction
+  to stop it in the FIS console (or `aws fis stop-experiment --id <id>`) and
+  exits with code **3**.
 
 ## Safety
 
@@ -97,7 +102,8 @@ python -m chaos --config experiments.yaml --only stop-one-api-task --execute
 | Exit code | Meaning |
 |---|---|
 | 0 | every selected experiment passed, or the dry run passed |
-| 1 | any FAIL or NOT_RUN, a refused guard, a bad config, or a failed stop |
+| 1 | any FAIL or NOT_RUN, a refused guard, or a bad config |
+| 3 | an experiment could not be stopped and may still be running: stop it in the FIS console now (takes priority over 1) |
 
 The report (`chaos-report.md`) lists each experiment's result, time to
 recover, whether its runbook step was verified, and a timestamped log.
@@ -110,8 +116,8 @@ recover, whether its runbook step was verified, and a timestamped log.
 - Experiments run one after another, never in parallel.
 - "Runbook verified" means the system recovered without help in time. Runbook
   steps that need a human are not exercised.
-- If `StopFailed` is raised, the report for that run is not written; the
-  error message and stderr are the record.
+- If stopping an experiment fails, the script can only tell you; it does not
+  retry the stop or remove the fault itself.
 
 ## Security notes
 
