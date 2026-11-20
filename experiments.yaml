@@ -1,0 +1,20 @@
+# Experiments are FIS templates you already created; this file says how to
+# judge them. Template IDs here are placeholders.
+environment: staging
+
+experiments:
+  - name: stop-one-api-task
+    template_id: EXT1a2b3c4d5e6f7a
+    steady_state:
+      url: https://api.staging.example.com/healthz
+      expect_status: 200
+    recovery_timeout_seconds: 300
+    runbook_step: "RB-12 step 1: ECS replaces the stopped task; no action needed"
+
+  - name: reboot-cache-node
+    template_id: EXT9f8e7d6c5b4a3b
+    steady_state:
+      url: https://api.staging.example.com/healthz
+      expect_status: 200
+    recovery_timeout_seconds: 600
+    runbook_step: "RB-31 step 2: app falls back to the database while the cache reboots"
