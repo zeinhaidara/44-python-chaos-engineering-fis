@@ -19,6 +19,10 @@ declared in YAML. It is a **dry run** unless you pass `--execute`.
 > APIs or custom) that injects common failures and verifies recovery
 > runbooks.
 
+Why it matters: runbooks say a system recovers on its own, but that is
+rarely checked until a real failure. Injecting one failure at a time and
+timing the recovery turns that claim into a pass or fail result.
+
 ## Experiments file
 
 The FIS experiment templates (what to break, stop conditions, IAM role)
